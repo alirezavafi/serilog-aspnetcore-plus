@@ -14,7 +14,7 @@ namespace Serilog.Extensions
                 remoteIp = remoteIp.MapToIPv4();
             if (httpContext.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedIps))
             {
-                var ipString = forwardedIps.First().Split(',')[0].Trim();
+                var ipString = forwardedIps.First().Split(',')[0].Split(':')[0].Trim();
                 try
                 {
                     remoteIp = IPAddress.Parse(ipString);
