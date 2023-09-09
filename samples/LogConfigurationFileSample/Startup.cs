@@ -33,20 +33,6 @@ namespace LogConfigurationFileSample
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
-            if (env.IsDevelopment())
-            {
-                app.UseDeveloperExceptionPage();
-            }
-            else
-            {
-                app.UseExceptionHandler("/Error");
-                // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
-                app.UseHsts();
-            }
-
-            app.UseOpenApi();
-            app.UseSwaggerUi3();
-
             var dedicatedOptionalLogger = new LoggerConfiguration()
                 .SetSerilogPlusDefaultConfiguration()
                 .WriteTo.File(new CompactJsonFormatter(),"App_Data/Logs/log_requests.json")
@@ -67,6 +53,22 @@ namespace LogConfigurationFileSample
                 p.MaskedProperties.Add("*token*");
                 p.Logger = dedicatedOptionalLogger; //if sets to null, request logger will use default global Serilog.Log.Logger
             });
+            
+            if (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+            }
+            else
+            {
+                app.UseExceptionHandler("/Error");
+                // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
+                app.UseHsts();
+            }
+
+            app.UseOpenApi();
+            app.UseSwaggerUi3();
+
+            
 
             app.UseHttpsRedirection();
             app.UseStaticFiles();
