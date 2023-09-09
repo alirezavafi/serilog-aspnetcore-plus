@@ -28,341 +28,315 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Primitives;
 using Newtonsoft.Json.Linq;
+using Serilog.Core;
 using Serilog.Extensions;
 
-namespace Serilog.AspNetCore
+namespace Serilog.AspNetCore;
+
+// ReSharper disable once ClassNeverInstantiated.Global
+class RequestLoggingMiddleware
 {
-    // ReSharper disable once ClassNeverInstantiated.Global
-    class RequestLoggingMiddleware
+    readonly RequestDelegate _next;
+    readonly DiagnosticContext _diagnosticContext;
+    private readonly RequestLoggingOptions _options;
+    readonly Action<IDiagnosticContext, HttpContext>? _enrichDiagnosticContext;
+    readonly ILogger? _logger;
+    static readonly LogEventProperty[] NoProperties = Array.Empty<LogEventProperty>();
+    private readonly MessageTemplate _messageTemplate;
+
+    public RequestLoggingMiddleware(RequestDelegate next, DiagnosticContext diagnosticContext,
+        RequestLoggingOptions options)
     {
-        readonly RequestDelegate _next;
-        readonly DiagnosticContext _diagnosticContext;
-        private readonly RequestLoggingOptions _options;
-        readonly Action<IDiagnosticContext, HttpContext> _enrichDiagnosticContext;
-        readonly ILogger _logger;
-        readonly bool _includeQueryInRequestPath;
-        static readonly LogEventProperty[] NoProperties = new LogEventProperty[0];
+        if (options == null) throw new ArgumentNullException(nameof(options));
+        _next = next ?? throw new ArgumentNullException(nameof(next));
+        _messageTemplate = new MessageTemplateParser().Parse(options.MessageTemplate);
+        _diagnosticContext = diagnosticContext ?? throw new ArgumentNullException(nameof(diagnosticContext));
+        _options = options;
+        _enrichDiagnosticContext = options.EnrichDiagnosticContext;
+        _logger = options.Logger?.ForContext<RequestLoggingMiddleware>();
+    }
 
-        public RequestLoggingMiddleware(RequestDelegate next, DiagnosticContext diagnosticContext,
-            RequestLoggingOptions options)
+    // ReSharper disable once UnusedMember.Global
+    public async Task Invoke(HttpContext httpContext)
+    {
+        if (httpContext == null) throw new ArgumentNullException(nameof(httpContext));
+
+        var start = Stopwatch.GetTimestamp();
+
+        FetchOrGenerateCorrelationId(httpContext);
+
+        var collector = _diagnosticContext.BeginCollection();
+
+        httpContext.Request.EnableBuffering();
+        var memoryStream = new MemoryStream();
+        var originalResponseBodyStream = httpContext.Response.Body;
+        httpContext.Response.Body = memoryStream;
+        try
         {
-            if (options == null) throw new ArgumentNullException(nameof(options));
-            _next = next ?? throw new ArgumentNullException(nameof(next));
-            _diagnosticContext = diagnosticContext ?? throw new ArgumentNullException(nameof(diagnosticContext));
-            _options = options;
+            await _next(httpContext);
+            var elapsedMs = GetElapsedMilliseconds(start, Stopwatch.GetTimestamp());
+            LogHttpRequest(httpContext, collector, elapsedMs, null);
+        }
+        catch (Exception ex)
+            // Never caught, because `LogHttpRequest()` returns false. This ensures e.g. the developer exception page is still
+            // shown, although it does also mean we see a duplicate "unhandled exception" event from ASP.NET Core.
+            when (LogHttpRequest(httpContext, collector,
+                      GetElapsedMilliseconds(start, Stopwatch.GetTimestamp()), ex))
+        {
+        }
+        finally
+        {
+            await RevertResponseBodyStreamAsync(memoryStream, originalResponseBodyStream);
+            collector.Dispose();
+            memoryStream.Dispose();
+        }
+    }
 
-            _enrichDiagnosticContext = options.EnrichDiagnosticContext;
-            _logger = options.Logger?.ForContext<RequestLoggingMiddleware>();
-            _includeQueryInRequestPath = options.IncludeQueryInRequestPath;
+
+    private void FetchOrGenerateCorrelationId(HttpContext context)
+    {
+        var header = context.Request.Headers["X-Correlation-ID"];
+        var correlationId = header.Count > 0 ? header[0] : null;
+        context.Items["CorrelationId"] = correlationId;
+    }
+
+    static double GetElapsedMilliseconds(long start, long stop)
+    {
+        return (stop - start) * 1000 / (double)Stopwatch.Frequency;
+    }
+
+    static string? GetPath(HttpContext httpContext, bool includeQueryInRequestPath)
+    {
+        /*
+            In some cases, like when running integration tests with WebApplicationFactory<T>
+            the Path returns an empty string instead of null, in that case we can't use
+            ?? as fallback.
+        */
+        var requestPath = includeQueryInRequestPath
+            ? httpContext.Features.Get<IHttpRequestFeature>()?.RawTarget
+            : httpContext.Features.Get<IHttpRequestFeature>()?.Path;
+        if (string.IsNullOrEmpty(requestPath))
+        {
+            requestPath = httpContext.Request.Path.ToString();
         }
 
-        // ReSharper disable once UnusedMember.Global
-        public async Task Invoke(HttpContext httpContext)
+        return requestPath;
+    }
+
+    private bool LogHttpRequest(HttpContext context, DiagnosticContextCollector collector, double elapsedMs,
+        Exception? ex)
+    {
+        var logger = _logger ?? Log.ForContext<RequestLoggingMiddleware>();
+        var level = _options.GetLevel(context, elapsedMs, ex);
+
+        if (!logger.IsEnabled(level)) return false;
+
+        // Enrich diagnostic context
+        _enrichDiagnosticContext?.Invoke(_diagnosticContext, context);
+
+        string? requestBodyText;
+        string responseBodyText;
+
+        var isRequestOk = !(context.Response.StatusCode >= 400 || ex != null);
+        if (_options.LogMode == LogMode.LogAll ||
+            (!isRequestOk && _options.LogMode == LogMode.LogFailures))
         {
-            if (httpContext == null) throw new ArgumentNullException(nameof(httpContext));
-
-            var start = Stopwatch.GetTimestamp();
-
-            FetchOrGenerateCorrelationId(httpContext);
-
-            var collector = _diagnosticContext.BeginCollection();
-
-            httpContext.Request.EnableBuffering();
-            var memoryStream = new MemoryStream();
-            var originalResponseBodyStream = httpContext.Response.Body;
-            httpContext.Response.Body = memoryStream;
-            try
+            object? requestBody = null;
+            if ((_options.RequestBodyLogMode == LogMode.LogAll ||
+                 (!isRequestOk && _options.RequestBodyLogMode == LogMode.LogFailures)))
             {
-                await _next(httpContext);
-                var elapsedMs = GetElapsedMilliseconds(start, Stopwatch.GetTimestamp());
-                LogHttpRequest(httpContext, collector, elapsedMs, null);
-            }
-            catch (Exception ex)
-                // Never caught, because `LogCompletion()` returns false. This ensures e.g. the developer exception page is still
-                // shown, although it does also mean we see a duplicate "unhandled exception" event from ASP.NET Core.
-                when (LogHttpRequest(httpContext, collector,
-                          GetElapsedMilliseconds(start, Stopwatch.GetTimestamp()), ex))
-            {
-            }
-            finally
-            {
-                await RevertResponseBodyStreamAsync(memoryStream, originalResponseBodyStream);
-                collector.Dispose();
-                memoryStream.Dispose();
-            }
-        }
-
-
-        private void FetchOrGenerateCorrelationId(HttpContext context)
-        {
-            var header = context.Request.Headers["X-Correlation-ID"];
-            var correlationId = header.Count > 0 ? header[0] : Guid.NewGuid().ToString();
-            context.Items["CorrelationId"] = correlationId;
-        }
-
-        static double GetElapsedMilliseconds(long start, long stop)
-        {
-            return (stop - start) * 1000 / (double)Stopwatch.Frequency;
-        }
-
-        static string GetPath(HttpContext httpContext, bool includeQueryInRequestPath)
-        {
-            /*
-                In some cases, like when running integration tests with WebApplicationFactory<T>
-                the Path returns an empty string instead of null, in that case we can't use
-                ?? as fallback.
-            */
-            var requestPath = includeQueryInRequestPath
-                ? httpContext.Features.Get<IHttpRequestFeature>()?.RawTarget
-                : httpContext.Features.Get<IHttpRequestFeature>()?.Path;
-            if (string.IsNullOrEmpty(requestPath))
-            {
-                requestPath = httpContext.Request.Path.ToString();
-            }
-
-            return requestPath;
-        }
-
-        private bool LogHttpRequest(HttpContext context, DiagnosticContextCollector collector, double elapsedMs,
-            Exception ex)
-        {
-            var logger = _logger ?? Log.ForContext<RequestLoggingMiddleware>();
-            var level = _options.GetLevel(context, elapsedMs, ex);
-
-            if (!logger.IsEnabled(level)) return false;
-
-            // Enrich diagnostic context
-            _enrichDiagnosticContext?.Invoke(_diagnosticContext, context);
-
-            string requestBodyText;
-            string responseBodyText;
-
-            var isRequestOk = !(context.Response.StatusCode >= 400 || ex != null);
-            if (_options.LogMode == LogMode.LogAll ||
-                (!isRequestOk && _options.LogMode == LogMode.LogFailures))
-            {
-                object requestBody = null;
-                if ((_options.RequestBodyLogMode == LogMode.LogAll ||
-                     (!isRequestOk && _options.RequestBodyLogMode == LogMode.LogFailures)))
+                requestBodyText = TryReadRequestBodyText(context);
+                if (requestBodyText != null && !string.IsNullOrWhiteSpace(requestBodyText))
                 {
-                    requestBodyText = TryReadRequestBodyText(context);
-                    if (!string.IsNullOrWhiteSpace(requestBodyText))
+                    JToken? token;
+                    if (requestBodyText.TryGetJToken(out token) && token != null)
                     {
-                        JToken token;
-                        if (requestBodyText.TryGetJToken(out token))
-                        {
-                            var jToken = token.MaskFields(_options.MaskedProperties.ToArray(),
-                                _options.MaskFormat);
-                            requestBodyText = jToken.ToString();
-                            requestBody = jToken;
-                        }
-
-                        if (requestBodyText.Length > _options.RequestBodyLogTextLengthLimit)
-                            requestBodyText = requestBodyText.Substring(0, _options.RequestBodyLogTextLengthLimit);
+                        var jToken = token.MaskFields(_options.MaskedProperties.ToArray(),
+                            _options.MaskFormat);
+                        requestBodyText = jToken.ToString();
+                        requestBody = jToken;
                     }
+
+                    if (requestBodyText.Length > _options.RequestBodyLogTextLengthLimit)
+                        requestBodyText = requestBodyText.Substring(0, _options.RequestBodyLogTextLengthLimit);
                 }
                 else
                 {
-                    requestBodyText = "(Not Logged)";
+                    requestBodyText = "(Empty)";
                 }
+            }
+            else
+            {
+                requestBodyText = "(Not Logged)";
+            }
 
-                var requestHeader = new Dictionary<string, object>();
-                if (_options.RequestHeaderLogMode == LogMode.LogAll ||
-                    (!isRequestOk && _options.RequestHeaderLogMode == LogMode.LogFailures))
-                {
-                    try
-                    {
-                        var valuesByKey = context.Request.Headers
-                            .Mask(_options.MaskedProperties.ToArray(), _options.MaskFormat).GroupBy(x => x.Key);
-                        foreach (var item in valuesByKey)
-                        {
-                            if (item.Count() > 1)
-                                requestHeader.Add(item.Key, item.Select(x => x.Value.ToString()).ToArray());
-                            else
-                                requestHeader.Add(item.Key, item.First().Value.ToString());
-                        }
-                    }
-                    catch (Exception headerParseException)
-                    {
-                        SelfLog.WriteLine("Cannot parse request header: " + headerParseException);
-                    }
-                }
-
-                var userAgentDic = new Dictionary<string, string>();
-                if (context.Request.Headers.ContainsKey("User-Agent"))
-                {
-                    var userAgent = context.Request.Headers["User-Agent"].ToString();
-                    userAgentDic.Add("_Raw", userAgent);
-                    try
-                    {
-                        var uaParser = UAParser.Parser.GetDefault();
-                        var clientInfo = uaParser.Parse(userAgent);
-                        userAgentDic.Add("Browser", clientInfo.UA.Family);
-                        userAgentDic.Add("BrowserVersion", clientInfo.UA.Major + "." + clientInfo.UA.Minor);
-                        userAgentDic.Add("OperatingSystem", clientInfo.OS.Family);
-                        userAgentDic.Add("OperatingSystemVersion", clientInfo.OS.Major + "." + clientInfo.OS.Minor);
-                        userAgentDic.Add("Device", clientInfo.Device.Family);
-                        userAgentDic.Add("DeviceModel", clientInfo.Device.Model);
-                        userAgentDic.Add("DeviceManufacturer", clientInfo.Device.Brand);
-                    }
-                    catch (Exception e)
-                    {
-                        SelfLog.WriteLine($"Cannot parse user agent:" + userAgent + $" --- {e}");
-                    }
-                }
-
-                var requestQuery = new Dictionary<string, object>();
+            var requestHeader = new Dictionary<string, object>();
+            if (_options.RequestHeaderLogMode == LogMode.LogAll ||
+                (!isRequestOk && _options.RequestHeaderLogMode == LogMode.LogFailures))
+            {
                 try
                 {
-                    var valuesByKey = context.Request.Query.GroupBy(x => x.Key);
+                    var valuesByKey = context.Request.Headers
+                        .Mask(_options.MaskedProperties.ToArray(), _options.MaskFormat).GroupBy(x => x.Key);
                     foreach (var item in valuesByKey)
                     {
                         if (item.Count() > 1)
-                            requestQuery.Add(item.Key, item.Select(x => x.Value.ToString()).ToArray());
+                            requestHeader.Add(item.Key, item.Select(x => x.Value.ToString()).ToArray());
                         else
-                            requestQuery.Add(item.Key, item.First().Value.ToString());
+                            requestHeader.Add(item.Key, item.First().Value.ToString());
                     }
+                }
+                catch (Exception headerParseException)
+                {
+                    SelfLog.WriteLine("Cannot parse request header: " + headerParseException);
+                }
+            }
+
+            var userAgentDic = new Dictionary<string, string>();
+            if (context.Request.Headers.ContainsKey("User-Agent"))
+            {
+                var userAgent = context.Request.Headers["User-Agent"].ToString();
+                userAgentDic.Add("_Raw", userAgent);
+                try
+                {
+                    var uaParser = UAParser.Parser.GetDefault();
+                    var clientInfo = uaParser.Parse(userAgent);
+                    userAgentDic.Add("Browser", clientInfo.UA.Family);
+                    userAgentDic.Add("BrowserVersion", clientInfo.UA.Major + "." + clientInfo.UA.Minor);
+                    userAgentDic.Add("OperatingSystem", clientInfo.OS.Family);
+                    userAgentDic.Add("OperatingSystemVersion", clientInfo.OS.Major + "." + clientInfo.OS.Minor);
+                    userAgentDic.Add("Device", clientInfo.Device.Family);
+                    userAgentDic.Add("DeviceModel", clientInfo.Device.Model);
+                    userAgentDic.Add("DeviceManufacturer", clientInfo.Device.Brand);
                 }
                 catch (Exception e)
                 {
-                    SelfLog.WriteLine($"Cannot parse query string: {e}");
+                    SelfLog.WriteLine($"Cannot parse user agent:" + userAgent + $" --- {e}");
                 }
+            }
 
-                var requestData = new
+            var requestQuery = new Dictionary<string, object>();
+            try
+            {
+                var valuesByKey = context.Request.Query.GroupBy(x => x.Key);
+                foreach (var item in valuesByKey)
                 {
-                    ClientIp = context.GetClientIp().ToString(),
-                    Method = context.Request.Method,
-                    Scheme = context.Request.Scheme,
-                    Host = context.Request.Host.Value,
-                    Path = context.Request.Path.Value,
-                    QueryString = context.Request.QueryString.Value,
-                    Query = requestQuery,
-                    BodyString = requestBodyText,
-                    Body = requestBody,
-                    Header = requestHeader,
-                    UserAgent = userAgentDic,
-                };
+                    if (item.Count() > 1)
+                        requestQuery.Add(item.Key, item.Select(x => x.Value.ToString()).ToArray());
+                    else
+                        requestQuery.Add(item.Key, item.First().Value.ToString());
+                }
+            }
+            catch (Exception e)
+            {
+                SelfLog.WriteLine($"Cannot parse query string: {e}");
+            }
+
+            var requestData = new HttpRequestInformation(context.GetClientIp()?.ToString(), context.Request.Method, context.Request.Scheme, context.Request.Host.Value, GetPath(context, _options.IncludeQueryInRequestPath), context.Request.QueryString.Value, requestQuery, requestBodyText, requestBody, requestHeader, userAgentDic);
                 
-                object responseBody = null;
-                if ((_options.ResponseBodyLogMode == LogMode.LogAll ||
-                     (!isRequestOk && _options.ResponseBodyLogMode == LogMode.LogFailures)))
+            object? responseBody = null;
+            if ((_options.ResponseBodyLogMode == LogMode.LogAll ||
+                 (!isRequestOk && _options.ResponseBodyLogMode == LogMode.LogFailures)))
+            {
+                responseBodyText = TryReadResponseBodyText(context);
+                if (!string.IsNullOrWhiteSpace(responseBodyText))
                 {
-                    responseBodyText = TryReadResponseBodyText(context);
-                    if (!string.IsNullOrWhiteSpace(responseBodyText))
+                    JToken? jToken;
+                    if (responseBodyText.TryGetJToken(out jToken) && jToken != null)
                     {
-                        JToken jToken;
-                        if (responseBodyText.TryGetJToken(out jToken))
-                        {
-                            jToken = jToken.MaskFields(_options.MaskedProperties.ToArray(), _options.MaskFormat);
-                            responseBodyText = jToken.ToString();
-                            responseBody = jToken;
-                        }
+                        jToken = jToken.MaskFields(_options.MaskedProperties.ToArray(), _options.MaskFormat);
+                        responseBodyText = jToken.ToString();
+                        responseBody = jToken;
+                    }
 
-                        if (responseBodyText.Length > _options.ResponseBodyLogTextLengthLimit)
-                        {
-                            responseBodyText = responseBodyText.Substring(0, _options.ResponseBodyLogTextLengthLimit);
-                        }
+                    if (responseBodyText.Length > _options.ResponseBodyLogTextLengthLimit)
+                    {
+                        responseBodyText = responseBodyText.Substring(0, _options.ResponseBodyLogTextLengthLimit);
                     }
                 }
                 else
                 {
-                    responseBodyText = "(Not Logged)";
+                    responseBodyText = "(Empty)";
                 }
-
-                var responseHeader = new Dictionary<string, object>();
-                if (_options.ResponseHeaderLogMode == LogMode.LogAll ||
-                    (!isRequestOk && _options.ResponseHeaderLogMode == LogMode.LogFailures))
-                {
-                    try
-                    {
-                        var valuesByKey = context.Response.Headers
-                            .Mask(_options.MaskedProperties.ToArray(), _options.MaskFormat).GroupBy(x => x.Key);
-                        foreach (var item in valuesByKey)
-                        {
-                            if (item.Count() > 1)
-                                responseHeader.Add(item.Key, item.Select(x => x.Value.ToString()).ToArray());
-                            else
-                                responseHeader.Add(item.Key, item.First().Value.ToString());
-                        }
-                    }
-                    catch (Exception headerParseException)
-                    {
-                        SelfLog.WriteLine("Cannot parse response header: " + headerParseException);
-                    }
-                }
-
-                var responseData = new
-                {
-                    context.Response.StatusCode,
-                    IsSucceed = isRequestOk,
-                    ElapsedMilliseconds = elapsedMs,
-                    BodyString = responseBodyText,
-                    Body = responseBody,
-                    Header = responseHeader,
-                };
-
-                if (!collector.TryComplete(out var collectedProperties))
-                    collectedProperties = NoProperties;
-
-                logger.Write(level, ex, _options.MessageTemplate, new
-                {
-                    Request = requestData,
-                    Response = responseData,
-                    Diagnostics = collectedProperties.ToDictionary(x => x.Name, x => x.Value.ToString()),
-                });
             }
-
-            return false;
-        }
-
-        private static string TryReadRequestBodyText(HttpContext context)
-        {
-            string requestBodyText = null;
-            if (context.Request.ContentLength.HasValue && context.Request.ContentLength > 0)
+            else
             {
-                context.Request.Body.Position = 0;
-
-                using (StreamReader reader = new StreamReader(context.Request.Body, Encoding.UTF8, true, -1, true))
-                {
-                    requestBodyText = reader.ReadToEnd();
-                }
-
-                context.Request.Body.Position = 0;
+                responseBodyText = "(Not Logged)";
             }
 
-            return requestBodyText;
-        }
-
-        private static string TryReadResponseBodyText(HttpContext context)
-        {
-            var responseBodyText = string.Empty;
-            if (context.Response.Body != null && context.Response.Body.Length > 0)
+            var responseHeader = new Dictionary<string, object>();
+            if (_options.ResponseHeaderLogMode == LogMode.LogAll ||
+                (!isRequestOk && _options.ResponseHeaderLogMode == LogMode.LogFailures))
             {
                 try
                 {
-                    context.Response.Body.Position = 0;
-
-                    using (StreamReader reader =
-                           new StreamReader(context.Response.Body, Encoding.UTF8, true, -1, true))
+                    var valuesByKey = context.Response.Headers
+                        .Mask(_options.MaskedProperties.ToArray(), _options.MaskFormat).GroupBy(x => x.Key);
+                    foreach (var item in valuesByKey)
                     {
-                        responseBodyText = reader.ReadToEnd();
+                        if (item.Count() > 1)
+                            responseHeader.Add(item.Key, item.Select(x => x.Value.ToString()).ToArray());
+                        else
+                            responseHeader.Add(item.Key, item.First().Value.ToString());
                     }
-
-                    context.Response.Body.Position = 0;
                 }
-                catch (Exception responseParseException)
+                catch (Exception headerParseException)
                 {
-                    SelfLog.WriteLine("Failed to extract response: " + responseParseException);
+                    SelfLog.WriteLine("Cannot parse response header: " + headerParseException);
                 }
             }
 
-            return responseBodyText;
+            var responseData = new HttpResponseInformation(context.Response.StatusCode, isRequestOk, elapsedMs, responseBodyText, responseBody, responseHeader);
+
+            if (!collector.TryComplete(out var collectedProperties, out var collectedException))
+                collectedProperties = NoProperties;
+
+            var httpContextInfo = new HttpContextInformation(requestData, responseData);
+            var messageProperties = _options.GetMessageTemplateProperties(httpContextInfo, logger);
+            var evt = new LogEvent(DateTimeOffset.Now, level, ex ?? collectedException, _messageTemplate, collectedProperties.Concat(messageProperties));
+            logger.Write(evt);
         }
 
-        async Task RevertResponseBodyStreamAsync(Stream bodyStream, Stream orginalBodyStream)
+        return false;
+    }
+
+    private static string? TryReadRequestBodyText(HttpContext context)
+    {
+        string? requestBodyText = null;
+        if (context.Request.Body != null && context.Request.Body.Length > 0)
         {
-            bodyStream.Seek(0, SeekOrigin.Begin);
-            await bodyStream.CopyToAsync(orginalBodyStream);
+            context.Request.EnableBuffering();
+            context.Request.Body.Seek(0, SeekOrigin.Begin);
+            requestBodyText = new StreamReader(context.Request.Body).ReadToEnd();
+            context.Request.Body.Seek(0, SeekOrigin.Begin);
         }
+
+        return requestBodyText;
+    }
+
+    private static string TryReadResponseBodyText(HttpContext context)
+    {
+        var responseBodyText = string.Empty;
+        if (context.Response.Body != null && context.Response.Body.Length > 0)
+        {
+            try
+            {
+                context.Response.Body.Seek(0, SeekOrigin.Begin);
+                responseBodyText = new StreamReader(context.Response.Body).ReadToEnd();
+                context.Response.Body.Seek(0, SeekOrigin.Begin);
+            }
+            catch (Exception responseParseException)
+            {
+                SelfLog.WriteLine("Failed to extract response: " + responseParseException);
+            }
+        }
+
+        return responseBodyText;
+    }
+
+    async Task RevertResponseBodyStreamAsync(Stream bodyStream, Stream orginalBodyStream)
+    {
+        bodyStream.Seek(0, SeekOrigin.Begin);
+        await bodyStream.CopyToAsync(orginalBodyStream);
     }
 }

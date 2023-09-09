@@ -1,14 +1,19 @@
 # Serilog.AspNetCore.Plus
-An improved version of Serilog.AspNetCore package based on my usage in applications with following features:
+An improved version of Serilog.AspNetCore package based on my experience in years ago. This package add following features:
 
-- Default log setup based on practices for faster project boostrap
-- Data masking for sensitive information
-- Captures request/response body controlled by response status and configuration
-- Captures request/response header controlled by response status and configuration
-- Request/response body size truncation for preventing performance penalties
-- Log levels based on response status code (Warning for status >= 400, Error for status >= 500)
-- Capture additional data like Event Id, User Agent Data and other environment data
-- Read log configuration automatically from logsettings.json or logsettings.{Environment}.json if files exists for better log configuration management
+- Adds following features with default log setup:
+  - Adds User Claims Enricher. This enricher logs all user claims.
+  - Adds CorrelationId Enricher. This enricher adds Correlation-Id to all log events. This helps finding relevant logs using Correlation-Id.
+  - Adds Default EventId Enricher. This enricher uses MurmurHash to generate Short Ids based on message template.
+  - Adds LogContext Enricher. This enricher allows to capture data on relevant log entries.
+  - Attaches MachineName and CurrentUserName (OS-Level) to logs.
+  - Adds Json.Net/System.Text.Json destructure to serialize json texts correctly.
+- Allow to capture request/response with following features:
+  - Conditional request/response capturing based on success or error responses.
+  - Captures jsons as structured object that allows filtering logs on request/response object properties.
+  - Masks sensitive information.
+  - Captures additional data like Parsed User Agent Data.
+- Adds logsettings.json and logsettings.{Environment}.json optionally to manage log configuration in separate settings file for simplicity. 
 
 ### Instructions
 
@@ -22,56 +27,36 @@ dotnet add package Serilog.AspNetCore.Plus
 
 ```csharp
 using Serilog;
-using Serilog.Events;
 
-public class Program
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+
+try
 {
-    public static int Main(string[] args)
-    {
-        Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
-            .Enrich.FromLogContext()
-            .WriteTo.Console()
-            .CreateLogger();
+    Log.Information("Starting web application");
 
-        try
-        {
-            Log.Information("Starting web host");
-            CreateHostBuilder(args).Build().Run();
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            Log.Fatal(ex, "Host terminated unexpectedly");
-            return 1;
-        }
-        finally
-        {
-            Log.CloseAndFlush();
-        }
-    }
-```
+    var builder = WebApplication.CreateBuilder(args);
 
-**Then**, add `UseSerilogPlus()` to the Generic Host in `CreateHostBuilder()`.
+    builder.Host.UseSerilog(); // <-- Add this line
+    
+    var app = builder.Build();
 
-```csharp        
-    public static IHostBuilder CreateHostBuilder(string[] args) =>
-            Host.CreateDefaultBuilder(args)
-                .UseSerilogPlus() // <-- Add this line
-                
-                // Or this for more configuration
-                // .UseSerilogPlus((configuration =>
-                // {
-                //     configuration
-                //         .WriteTo.Debug()
-                //         .WriteTo.Console(
-                //             outputTemplate:
-                //             "[{Timestamp:HH:mm:ss} {Level:u3}] {Message} {NewLine}{Properties} {NewLine}{Exception}{NewLine}",
-                //             theme: SystemConsoleTheme.Literate);
-                // })
-                
+    app.MapGet("/", () => "Hello World!");
+
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Application terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
 }
 ```
+
+The `builder.Host.UseSerilogPlus()` call will redirect all log events through your Serilog pipeline.
 
 **Or** you can initialize logger directly using:
 ```csharp

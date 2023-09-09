@@ -1,12 +1,11 @@
 ﻿using Serilog.Events;
 
-namespace Serilog.AspNetCore.Tests.Support
+namespace Serilog.AspNetCore.Tests.Support;
+
+static class Extensions
 {
-    public static class Extensions
+    public static object? LiteralValue(this LogEventPropertyValue @this)
     {
-        public static object LiteralValue(this LogEventPropertyValue @this)
-        {
-            return ((ScalarValue)@this).Value;
-        }
+        return ((ScalarValue)@this).Value;
     }
 }

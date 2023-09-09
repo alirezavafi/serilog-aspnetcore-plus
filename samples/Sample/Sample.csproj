@@ -1,18 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
     <PropertyGroup>
-        <TargetFramework>net5.0</TargetFramework>
+        <TargetFramework>net7.0</TargetFramework>
     </PropertyGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\src\Serilog.AspNetCore\Serilog.AspNetCore.Plus.csproj"/>
+        <ProjectReference Include="..\..\src\Serilog.AspNetCore\Serilog.AspNetCore.Plus.csproj" />
     </ItemGroup>
     <ItemGroup>
-        <Folder Remove="App_Data\Logs"/>
+        <Folder Remove="App_Data\Logs" />
     </ItemGroup>
     <ItemGroup>
-        <PackageReference Include="NSwag.AspNetCore" Version="13.16.1"/>
-        <PackageReference Include="Serilog.Sinks.Console" Version="4.0.1"/>
-        <PackageReference Include="Serilog.Sinks.File" Version="5.0.0"/>
+        <PackageReference Include="NSwag.AspNetCore" Version="13.20.0" />
+        <PackageReference Include="Serilog.Sinks.Console" Version="4.0.1" />
+        <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
     </ItemGroup>
 </Project>

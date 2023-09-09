@@ -1,31 +1,19 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>netcoreapp3.1;net5.0</TargetFrameworks>
-    <AssemblyName>Serilog.AspNetCore.Tests</AssemblyName>
-    <AssemblyOriginatorKeyFile>../../assets/Serilog.snk</AssemblyOriginatorKeyFile>
-    <SignAssembly>true</SignAssembly>
-    <PublicSign Condition=" '$(OS)' != 'Windows_NT' ">true</PublicSign>
+    <TargetFramework>net7.0</TargetFramework>
     <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Serilog.AspNetCore\Serilog.AspNetCore.Plus.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.4.5" PrivateAssets="All" />
+    <PackageReference Include="xunit" Version="2.4.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="7.0.5" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" />
-    <PackageReference Include="Serilog.Extensions.Hosting" Version="5.0.0-dev-00095" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.4.3" PrivateAssets="All" />
-    <PackageReference Include="xunit" Version="2.4.1" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(TargetFramework)' == 'netcoreapp3.1'">
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="3.1.5" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(TargetFramework)' == 'net5.0'">
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="5.0.3" />
+    <ProjectReference Include="..\..\src\Serilog.AspNetCore\Serilog.AspNetCore.Plus.csproj" />
   </ItemGroup>
 
 </Project>

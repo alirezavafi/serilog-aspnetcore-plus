@@ -5,51 +5,52 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 
-namespace Serilog
-{
-    internal class JsonDocumentDestructuringPolicy : IDestructuringPolicy
-    {
-        public bool TryDestructure(object value, ILogEventPropertyValueFactory _, out LogEventPropertyValue result)
-        {
-            if (!(value is JsonDocument jdoc))
-            {
-                result = null;
-                return false;
-            }
+namespace Serilog;
 
-            result = Destructure(jdoc.RootElement);
-            return true;
+internal class JsonDocumentDestructuringPolicy : IDestructuringPolicy
+{
+#pragma warning disable CS8767
+    public bool TryDestructure(object value, ILogEventPropertyValueFactory _, out LogEventPropertyValue? result)
+#pragma warning restore CS8767
+    {
+        if (!(value is JsonDocument jdoc))
+        {
+            result = default;
+            return false;
         }
 
-        static LogEventPropertyValue Destructure(in JsonElement jel)
+        result = Destructure(jdoc.RootElement);
+        return true;
+    }
+
+    static LogEventPropertyValue Destructure(in JsonElement jel)
+    {
+        switch (jel.ValueKind)
         {
-            switch (jel.ValueKind)
-            {
-                case JsonValueKind.Array:
-                    return new SequenceValue(jel.EnumerateArray().Select(ae => Destructure(in ae)));
+            case JsonValueKind.Array:
+                return new SequenceValue(jel.EnumerateArray().Select(ae => Destructure(in ae)));
 
-                case JsonValueKind.False:
-                    return new ScalarValue(false);
+            case JsonValueKind.False:
+                return new ScalarValue(false);
 
-                case JsonValueKind.True:
-                    return new ScalarValue(true);
+            case JsonValueKind.True:
+                return new ScalarValue(true);
 
-                case JsonValueKind.Null:
-                case JsonValueKind.Undefined:
-                    return new ScalarValue(null);
+            case JsonValueKind.Null:
+            case JsonValueKind.Undefined:
+                return new ScalarValue(null);
 
-                case JsonValueKind.Number:
-                    return new ScalarValue(jel.GetDecimal());
+            case JsonValueKind.Number:
+                return new ScalarValue(jel.GetDecimal());
 
-                case JsonValueKind.String:
-                    return new ScalarValue(jel.GetString());
+            case JsonValueKind.String:
+                return new ScalarValue(jel.GetString());
 
-                case JsonValueKind.Object:
-                    return new StructureValue(jel.EnumerateObject().Select(jp => new LogEventProperty(jp.Name, Destructure(jp.Value))));
+            case JsonValueKind.Object:
+                return new StructureValue(jel.EnumerateObject().Select(jp => new LogEventProperty(jp.Name, Destructure(jp.Value))));
 
-                default:
-                    throw new ArgumentException("Unrecognized value kind " + jel.ValueKind + ".");
-            }
+            default:
+                throw new ArgumentException("Unrecognized value kind " + jel.ValueKind + ".");
         }
     }
 }
