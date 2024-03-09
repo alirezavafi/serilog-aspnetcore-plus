@@ -33,17 +33,12 @@ using Serilog.Extensions;
 
 namespace Serilog.AspNetCore;
 
-// ReSharper disable once ClassNeverInstantiated.Global
 class RequestLoggingMiddleware
 {
     readonly RequestDelegate _next;
     readonly DiagnosticContext _diagnosticContext;
     readonly MessageTemplate _messageTemplate;
-    readonly Action<IDiagnosticContext, HttpContext>? _enrichDiagnosticContext;
-    readonly Func<HttpContext, double, Exception?, LogEventLevel> _getLevel;
-    readonly Func<HttpContext, string, double, int, IEnumerable<LogEventProperty>> _getMessageTemplateProperties;
     readonly ILogger? _logger;
-    readonly bool _includeQueryInRequestPath;
     static readonly LogEventProperty[] NoProperties = Array.Empty<LogEventProperty>();
     private readonly RequestLoggingOptions _options;
 
@@ -53,13 +48,8 @@ class RequestLoggingMiddleware
         _next = next ?? throw new ArgumentNullException(nameof(next));
         _diagnosticContext = diagnosticContext ?? throw new ArgumentNullException(nameof(diagnosticContext));
         _options = options;
-
-        _getLevel = options.GetLevel;
-        _enrichDiagnosticContext = options.EnrichDiagnosticContext;
         _messageTemplate = new MessageTemplateParser().Parse(options.MessageTemplate);
         _logger = options.Logger?.ForContext<RequestLoggingMiddleware>();
-        _includeQueryInRequestPath = options.IncludeQueryInRequestPath;
-        _getMessageTemplateProperties = options.GetMessageTemplateProperties;
     }
     
     // ReSharper disable once UnusedMember.Global
@@ -138,7 +128,7 @@ class RequestLoggingMiddleware
         if (!logger.IsEnabled(level)) return false;
 
         // Enrich diagnostic context
-        _enrichDiagnosticContext?.Invoke(_diagnosticContext, context);
+        _options.EnrichDiagnosticContext?.Invoke(_diagnosticContext, context);
 
         string? requestBodyText;
         string responseBodyText;
@@ -298,12 +288,11 @@ class RequestLoggingMiddleware
                 collectedProperties = NoProperties;
 
             var httpContextInfo = new HttpContextInformation(requestData, responseData);
-            var messageProperties = _options.GetMessageTemplateProperties(httpContextInfo, logger);
             var (traceId, spanId) = Activity.Current is { } activity ?
                 (activity.TraceId, activity.SpanId) :
                 (default(ActivityTraceId), default(ActivitySpanId));
 
-            var properties = collectedProperties.Concat(_getMessageTemplateProperties(httpContextInfo, GetPath(httpContext, _includeQueryInRequestPath), elapsedMs, statusCode));
+            var properties = collectedProperties.Concat(_options.GetMessageTemplateProperties(httpContextInfo, logger));
 
             var evt = new LogEvent(
                 DateTimeOffset.Now,
