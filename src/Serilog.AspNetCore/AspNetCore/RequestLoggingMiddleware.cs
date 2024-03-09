@@ -38,24 +38,30 @@ class RequestLoggingMiddleware
 {
     readonly RequestDelegate _next;
     readonly DiagnosticContext _diagnosticContext;
-    private readonly RequestLoggingOptions _options;
+    readonly MessageTemplate _messageTemplate;
     readonly Action<IDiagnosticContext, HttpContext>? _enrichDiagnosticContext;
+    readonly Func<HttpContext, double, Exception?, LogEventLevel> _getLevel;
+    readonly Func<HttpContext, string, double, int, IEnumerable<LogEventProperty>> _getMessageTemplateProperties;
     readonly ILogger? _logger;
+    readonly bool _includeQueryInRequestPath;
     static readonly LogEventProperty[] NoProperties = Array.Empty<LogEventProperty>();
-    private readonly MessageTemplate _messageTemplate;
+    private readonly RequestLoggingOptions _options;
 
-    public RequestLoggingMiddleware(RequestDelegate next, DiagnosticContext diagnosticContext,
-        RequestLoggingOptions options)
+    public RequestLoggingMiddleware(RequestDelegate next, DiagnosticContext diagnosticContext, RequestLoggingOptions options)
     {
         if (options == null) throw new ArgumentNullException(nameof(options));
         _next = next ?? throw new ArgumentNullException(nameof(next));
-        _messageTemplate = new MessageTemplateParser().Parse(options.MessageTemplate);
         _diagnosticContext = diagnosticContext ?? throw new ArgumentNullException(nameof(diagnosticContext));
         _options = options;
-        _enrichDiagnosticContext = options.EnrichDiagnosticContext;
-        _logger = options.Logger?.ForContext<RequestLoggingMiddleware>();
-    }
 
+        _getLevel = options.GetLevel;
+        _enrichDiagnosticContext = options.EnrichDiagnosticContext;
+        _messageTemplate = new MessageTemplateParser().Parse(options.MessageTemplate);
+        _logger = options.Logger?.ForContext<RequestLoggingMiddleware>();
+        _includeQueryInRequestPath = options.IncludeQueryInRequestPath;
+        _getMessageTemplateProperties = options.GetMessageTemplateProperties;
+    }
+    
     // ReSharper disable once UnusedMember.Global
     public async Task Invoke(HttpContext httpContext)
     {
@@ -293,7 +299,21 @@ class RequestLoggingMiddleware
 
             var httpContextInfo = new HttpContextInformation(requestData, responseData);
             var messageProperties = _options.GetMessageTemplateProperties(httpContextInfo, logger);
-            var evt = new LogEvent(DateTimeOffset.Now, level, ex ?? collectedException, _messageTemplate, collectedProperties.Concat(messageProperties));
+            var (traceId, spanId) = Activity.Current is { } activity ?
+                (activity.TraceId, activity.SpanId) :
+                (default(ActivityTraceId), default(ActivitySpanId));
+
+            var properties = collectedProperties.Concat(_getMessageTemplateProperties(httpContextInfo, GetPath(httpContext, _includeQueryInRequestPath), elapsedMs, statusCode));
+
+            var evt = new LogEvent(
+                DateTimeOffset.Now,
+                level,
+                ex ?? collectedException,
+                _messageTemplate,
+                properties,
+                traceId,
+                spanId);
+            
             logger.Write(evt);
         }
 

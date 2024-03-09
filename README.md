@@ -38,7 +38,7 @@ try
 
     var builder = WebApplication.CreateBuilder(args);
 
-    builder.Host.UseSerilog(); // <-- Add this line
+    builder.Host.UseSerilogPlus(); // <-- Add this line
     
     var app = builder.Build();
 
@@ -56,20 +56,9 @@ finally
 }
 ```
 
-The `builder.Host.UseSerilogPlus()` call will redirect all log events through your Serilog pipeline.
+The `builder.Host.UseSerilog()` call will redirect all log events through your Serilog pipeline.
 
-**Or** you can initialize logger directly using:
-```csharp
-    Log.Logger = new LoggerConfiguration()
-                    .SetSerilogPlusDefaultConfiguration() // <-- Add awesome staff like EventId, UserAgent and other useful enrichers
-                    .WriteTo.File(new CompactJsonFormatter(),"log.json")
-                    .CreateLogger();
-```
-
-**Finally**, clean up by removing the remaining configuration for the default logger:
-
- * Remove the `"Logging"` section from _appsettings.*.json_ files (this can be replaced with [Serilog configuration](https://github.com/serilog/serilog-settings-configuration) as shown in [the _Sample_ project](https://github.com/serilog/serilog-aspnetcore/blob/dev/samples/Sample/Program.cs), if required)
- * Remove `UseApplicationInsights()` (this can be replaced with the [Serilog AI sink](https://github.com/serilog/serilog-sinks-applicationinsights), if required)
+**Finally**, clean up by removing the remaining configuration for the default logger, including the `"Logging"` section from _appsettings.*.json_ files (this can be replaced with [Serilog configuration](https://github.com/serilog/serilog-settings-configuration) as shown in [the _Sample_ project](https://github.com/serilog/serilog-aspnetcore/blob/dev/samples/Sample/Program.cs), if required).
 
 That's it! With the level bumped up a little you will see log output resembling:
 
@@ -88,47 +77,112 @@ That's it! With the level bumped up a little you will see log output resembling:
 
 **Tip:** to see Serilog output in the Visual Studio output window when running under IIS, either select _ASP.NET Core Web Server_ from the _Show output from_ drop-down list, or replace `WriteTo.Console()` in the logger configuration with `WriteTo.Debug()`.
 
+A more complete example, including `appsettings.json` configuration, can be found in [the sample project here](https://github.com/serilog/serilog-aspnetcore/tree/dev/samples/Sample).
 
 ### Request logging
 
-In your application's _Startup.cs_, add the middleware with `UseSerilogPlus()`:
+The package includes middleware for smarter HTTP request logging. The default request logging implemented by ASP.NET Core is noisy, with multiple events emitted per request. The included middleware condenses these into a single event that carries method, path, status code, and timing information.
+
+As text, this has a format like:
+
+```
+[16:05:54 INF] HTTP GET / responded 200 in 227.3253 ms
+```
+
+Or [as JSON](https://github.com/serilog/serilog-formatting-compact):
+
+```json
+{
+  "@t": "2019-06-26T06:05:54.6881162Z",
+  "@mt": "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms",
+  "@r": ["224.5185"],
+  "RequestMethod": "GET",
+  "RequestPath": "/",
+  "StatusCode": 200,
+  "Elapsed": 224.5185,
+  "RequestId": "0HLNPVG1HI42T:00000001",
+  "CorrelationId": null,
+  "ConnectionId": "0HLNPVG1HI42T"
+}
+```
+
+To enable the middleware, first change the minimum level for `Microsoft.AspNetCore` to `Warning` in your logger configuration or _appsettings.json_ file:
 
 ```csharp
-        public void Configure(IApplicationBuilder app, IHostingEnvironment env)
-        {
-            if (env.IsDevelopment())
-            {
-                app.UseDeveloperExceptionPage();
-            }
-            else
-            {
-                app.UseExceptionHandler("/Home/Error");
-            }
+            .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
+```
 
-            app.UseSerilogPlusRequestLogging(); // <-- Add this line
+Then, in your application's _Program.cs_, add the middleware with `UseSerilogRequestLogging()`:
 
-            // or for more options add this:
-            // app.UseSerilogPlusRequestLogging(p =>
-            // {
-            //     p.LogMode = LogMode.LogAll;
-            //     p.RequestHeaderLogMode = LogMode.LogFailures;
-            //     p.RequestBodyLogMode = LogMode.LogFailures;
-            //     p.RequestBodyLogTextLengthLimit = 5000;
-            //     p.ResponseHeaderLogMode = LogMode.LogNone;
-            //     p.ResponseBodyLogMode = LogMode.LogNone;
-            //     p.ResponseBodyLogTextLengthLimit = 5000;
-            //     p.MaskFormat = "*****"; 
-            //     p.MaskedProperties.Clear();
-            //     p.MaskedProperties.Add("*password*");
-            //     p.MaskedProperties.Add("*token*");
-            // });
-            
-            // ...
-            // Other app configuration
-        }
+```csharp
+    var app = builder.Build();
+
+    app.UseSerilogRequestLogging(); // <-- Add this line
+
+    // or for more options add this:
+    // app.UseSerilogPlusRequestLogging(p =>
+    // {
+    //     p.LogMode = LogMode.LogAll;
+    //     p.RequestHeaderLogMode = LogMode.LogFailures;
+    //     p.RequestBodyLogMode = LogMode.LogFailures;
+    //     p.RequestBodyLogTextLengthLimit = 5000;
+    //     p.ResponseHeaderLogMode = LogMode.LogNone;
+    //     p.ResponseBodyLogMode = LogMode.LogNone;
+    //     p.ResponseBodyLogTextLengthLimit = 5000;
+    //     p.MaskFormat = "*****"; 
+    //     p.MaskedProperties.Clear();
+    //     p.MaskedProperties.Add("*password*");
+    //     p.MaskedProperties.Add("*token*");
+    // });
+
+    // Other app configuration
 ```
 
 It's important that the `UseSerilogPlusRequestLogging()` call appears _before_ handlers such as MVC. The middleware will not time or log components that appear before it in the pipeline. (This can be utilized to exclude noisy handlers from logging, such as `UseStaticFiles()`, by placing `UseSerilogPlusRequestLogging()` after them.)
+
+During request processing, additional properties can be attached to the completion event using `IDiagnosticContext.Set()`:
+
+```csharp
+    public class HomeController : Controller
+    {
+        readonly IDiagnosticContext _diagnosticContext;
+
+        public HomeController(IDiagnosticContext diagnosticContext)
+        {
+            _diagnosticContext = diagnosticContext ??
+                throw new ArgumentNullException(nameof(diagnosticContext));
+        }
+
+        public IActionResult Index()
+        {
+            // The request completion event will carry this property
+            _diagnosticContext.Set("CatalogLoadTime", 1423);
+
+            return View();
+        }
+```
+
+This pattern has the advantage of reducing the number of log events that need to be constructed, transmitted, and stored per HTTP request. Having many properties on the same event can also make correlation of request details and other data easier.
+
+You can modify the message template used for request completion events, add additional properties, or change the event level, using the `options` callback on `UseSerilogRequestLogging()`:
+
+```csharp
+app.UseSerilogPlusRequestLogging(options =>
+{
+    // Customize the message template
+    options.MessageTemplate = "Handled {RequestPath}";
+    
+    // Emit debug-level events instead of the defaults
+    options.GetLevel = (httpContext, elapsed, ex) => LogEventLevel.Debug;
+    
+    // Attach additional properties to the request completion event
+    options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+    {
+        diagnosticContext.Set("RequestHost", httpContext.Request.Host.Value);
+        diagnosticContext.Set("RequestScheme", httpContext.Request.Scheme);
+    };
+});
+```
 
 ### Sample Logged Item
 
@@ -209,10 +263,11 @@ The downside of initializing Serilog first is that services from the ASP.NET Cor
 
 To address this, Serilog supports two-stage initialization. An initial "bootstrap" logger is configured immediately when the program starts, and this is replaced by the fully-configured logger once the host has loaded.
 
-To use this technique, first replace the initial `CreateLogger()` call with `CreateBoostrapLogger()`:
+To use this technique, first replace the initial `CreateLogger()` call with `CreateBootstrapLogger()`:
 
 ```csharp
 using Serilog;
+using Serilog.Events;
 
 public class Program
 {
@@ -295,11 +350,13 @@ The Azure Diagnostic Log Stream ships events from any files in the `D:\home\LogF
             .WriteTo.Console()
             // Add this line:
             .WriteTo.File(
-                @"D:\home\LogFiles\Application\myapp.txt",
-                fileSizeLimitBytes: 1_000_000,
-                rollOnFileSizeLimit: true,
-                shared: true,
-                flushToDiskInterval: TimeSpan.FromSeconds(1))
+               System.IO.Path.Combine(Environment.GetEnvironmentVariable("HOME"), "LogFiles", "Application", "diagnostics.txt"),
+               rollingInterval: RollingInterval.Day,
+               fileSizeLimitBytes: 10 * 1024 * 1024,
+               retainedFileCountLimit: 2,
+               rollOnFileSizeLimit: true,
+               shared: true,
+               flushToDiskInterval: TimeSpan.FromSeconds(1))
             .CreateLogger();
 ```
 
