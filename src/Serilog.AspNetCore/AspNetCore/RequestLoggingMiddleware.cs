@@ -18,17 +18,8 @@ using Serilog.Debugging;
 using Serilog.Events;
 using Serilog.Extensions.Hosting;
 using Serilog.Parsing;
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Text.Json;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Primitives;
 using Newtonsoft.Json.Linq;
-using Serilog.Core;
 using Serilog.Extensions;
 
 namespace Serilog.AspNetCore;
@@ -228,7 +219,18 @@ class RequestLoggingMiddleware
                 SelfLog.WriteLine($"Cannot parse query string: {e}");
             }
 
-            var requestData = new HttpRequestInformation(context.GetClientIp()?.ToString(), context.Request.Method, context.Request.Scheme, context.Request.Host.Value, GetPath(context, _options.IncludeQueryInRequestPath), context.Request.QueryString.Value, requestQuery, requestBodyText, requestBody, requestHeader, userAgentDic);
+            var requestData = new HttpRequestInformation(
+                context.GetClientIp()?.ToString(), 
+                context.Request.Method, 
+                context.Request.Scheme, 
+                context.Request.Host.Value, 
+                GetPath(context, _options.IncludeQueryInRequestPath), 
+                context.Request.QueryString.Value, 
+                requestQuery, 
+                requestBodyText, 
+                requestBody, 
+                requestHeader, 
+                userAgentDic);
                 
             object? responseBody = null;
             if ((_options.ResponseBodyLogMode == LogMode.LogAll ||
@@ -292,7 +294,7 @@ class RequestLoggingMiddleware
                 (activity.TraceId, activity.SpanId) :
                 (default(ActivityTraceId), default(ActivitySpanId));
 
-            var properties = collectedProperties.Concat(_options.GetMessageTemplateProperties(httpContextInfo, logger));
+            var properties = (collectedProperties ?? []).Concat(_options.GetMessageTemplateProperties(httpContextInfo, logger));
 
             var evt = new LogEvent(
                 DateTimeOffset.Now,

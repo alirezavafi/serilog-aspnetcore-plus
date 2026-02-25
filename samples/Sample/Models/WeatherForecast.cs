@@ -11,6 +11,6 @@ namespace Sample.Models
         public int TemperatureF => 32 + (int) (PasswordNumber / 0.5556);
         public string Token { get; set; } = "x1241432xfgdsfk$!~!@$@%$#^$";
 
-        public string Summary { get; set; }
+        public string? Summary { get; set; }
     }
 }

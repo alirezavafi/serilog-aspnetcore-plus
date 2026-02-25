@@ -20,7 +20,7 @@ public class HttpRequestInformation
     /// <summary>
     /// Http host 
     /// </summary>
-    public string Host { get; }
+    public string? Host { get; }
     /// <summary>
     /// Http request path
     /// </summary>
@@ -64,7 +64,7 @@ public class HttpRequestInformation
     /// <param name="body"></param>
     /// <param name="header"></param>
     /// <param name="userAgent"></param>
-    public HttpRequestInformation(string? clientIp, string method, string scheme, string host, string? path, string? queryString, Dictionary<string, object> query, string? bodyString, object? body, Dictionary<string, object> header, Dictionary<string, string> userAgent)
+    public HttpRequestInformation(string? clientIp, string method, string scheme, string? host, string? path, string? queryString, Dictionary<string, object> query, string? bodyString, object? body, Dictionary<string, object> header, Dictionary<string, string> userAgent)
     {
         ClientIp = clientIp;
         Method = method;
