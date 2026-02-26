@@ -2,7 +2,7 @@
 An improved version of Serilog.AspNetCore package based on my experience in years ago. This package add following features:
 
 - Adds following features with default log setup:
-  - Adds User Claims Enricher. This enricher logs all user claims.
+  - Adds User Claims Enricher. 
   - Adds CorrelationId Enricher. This enricher adds Correlation-Id to all log events. This helps finding relevant logs using Correlation-Id.
   - Adds Default EventId Enricher. This enricher uses MurmurHash to generate Short Ids based on message template.
   - Adds LogContext Enricher. This enricher allows to capture data on relevant log entries.
@@ -386,4 +386,19 @@ using (logger.PushProperty("OperationType", "update"))
 {
     // UserId and OperationType are set for all logging events in these brackets
 }
+```
+
+### User Claims Enrichment Blacklist/Whitelist Support
+You can whitelist or blacklist claims in your `Program.cs`:
+
+```csharp
+using Serilog.Enrichers;
+
+// Whitelist only specific claims
+UserClaimsEnricher.WhitelistedClaims.Add("sub");
+UserClaimsEnricher.WhitelistedClaims.Add("role");
+
+// Or blacklist some claims
+UserClaimsEnricher.BlacklistedClaims.Add("amr");
+UserClaimsEnricher.BlacklistedClaims.Add("sid");
 ```

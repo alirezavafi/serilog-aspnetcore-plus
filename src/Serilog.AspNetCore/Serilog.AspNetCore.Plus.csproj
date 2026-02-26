@@ -9,13 +9,14 @@
 		<PackageTags>serilog;aspnet;aspnetcore</PackageTags>
 		<PackageIcon>icon.png</PackageIcon>
 		<PackageProjectUrl>https://github.com/alirezavafi/serilog-aspnetcore-plus</PackageProjectUrl>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
 		<RepositoryUrl>https://github.com/alirezavafi/serilog-aspnetcore-plus</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<GenerateAssemblyVersionAttribute>false</GenerateAssemblyVersionAttribute>
 		<RootNamespace>Serilog</RootNamespace>
 		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-		<Version>10.0.1</Version>
+		<Version>10.1</Version>
 	</PropertyGroup>
 
 	<ItemGroup>

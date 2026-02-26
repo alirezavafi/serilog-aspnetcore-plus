@@ -11,7 +11,15 @@ namespace Serilog.Enrichers;
 /// </summary>
 public class UserClaimsEnricher : ILogEventEnricher
 {
-    private HashSet<string> ignoredClaims = new HashSet<string>();
+    /// <summary>
+    /// Claim list to ignore
+    /// </summary>
+    public static HashSet<string> BlacklistedClaims { get; } = new();
+
+    /// <summary>
+    /// Claim list to allow
+    /// </summary>
+    public static HashSet<string> WhitelistedClaims { get; } = new();
 
     /// <summary>
     /// Enriches user claims except ignoredclaims
@@ -29,7 +37,19 @@ public class UserClaimsEnricher : ILogEventEnricher
         }
 
         var user = httpContext.User;
-        var userClaimsByType = user.Claims.Where(x => !ignoredClaims.Contains(x.Type)).GroupBy(x => x.Type);
+        var claims = user.Claims;
+
+        if (WhitelistedClaims.Any())
+        {
+            claims = claims.Where(x => WhitelistedClaims.Contains(x.Type));
+        }
+
+        if (BlacklistedClaims.Any())
+        {
+            claims = claims.Where(x => !BlacklistedClaims.Contains(x.Type));
+        }
+
+        var userClaimsByType = claims.GroupBy(x => x.Type);
         var claimsDic = new Dictionary<string, object>();
         foreach (var claim in userClaimsByType)
         {
